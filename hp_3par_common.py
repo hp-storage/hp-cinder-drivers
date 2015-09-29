@@ -59,6 +59,7 @@ from cinder.volume import volume_types
 LOG = logging.getLogger(__name__)
 
 MIN_CLIENT_VERSION = '3.0.0'
+DEDUP_API_VERSION = 30201120
 
 hp3par_opts = [
     cfg.StrOpt('hp3par_api_url',
@@ -122,10 +123,11 @@ class HP3PARCommon(object):
         2.0.6 - use loopingcall.wait instead of time.sleep
         2.0.7 - Allow extend volume based on snapshot bug #1285906
         2.0.8 - Fix detach issue for multiple hosts Bug #1288927
+        2.88.9 - Added support for dedup provisioning
 
     """
 
-    VERSION = "2.0.8"
+    VERSION = "2.88.9"
 
     stats = {}
 
@@ -138,7 +140,7 @@ class HP3PARCommon(object):
 
     # Valid values for volume type extra specs
     # The first value in the list is the default value
-    valid_prov_values = ['thin', 'full']
+    valid_prov_values = ['thin', 'full', 'dedup']
     valid_persona_values = ['1 - Generic',
                             '2 - Generic-ALUA',
                             '6 - Generic-legacy',
@@ -209,6 +211,8 @@ class HP3PARCommon(object):
     def do_setup(self, context):
         try:
             self.client = self._create_client()
+            wsapi_version = self.client.getWsApiVersion()
+            self.API_VERSION = wsapi_version['build']
         except hpexceptions.UnsupportedVersion as ex:
             raise exception.InvalidInput(ex)
         LOG.info(_("HP3PARCommon %(common_ver)s, hp3parclient %(rest_ver)s")
@@ -692,16 +696,29 @@ class HP3PARCommon(object):
                                          default_prov)
         # check for valid provisioning type
         if prov_value not in self.valid_prov_values:
-            err = _("Must specify a valid provisioning type %(valid)s, "
-                    "value '%(prov)s' is invalid.") % \
-                   ({'valid': self.valid_prov_values,
-                     'prov': prov_value})
+            err = (_("Must specify a valid provisioning type %(valid)s, "
+                     "value '%(prov)s' is invalid.") %
+                   {'valid': self.valid_prov_values,
+                    'prov': prov_value})
             LOG.error(err)
             raise exception.InvalidInput(reason=err)
 
         tpvv = True
+        tdvv = False
         if prov_value == "full":
             tpvv = False
+        elif prov_value == "dedup":
+            tpvv = False
+            tdvv = True
+
+        if tdvv and (self.API_VERSION < DEDUP_API_VERSION):
+            err = (_("Dedup is a valid provisioning type, "
+                     "but requires WSAPI version '%(dedup_version)s' "
+                     "version '%(version)s' is installed.") %
+                   {'dedup_version': DEDUP_API_VERSION,
+                    'version': self.API_VERSION})
+            LOG.error(err)
+            raise exception.InvalidInput(reason=err)
 
         # check for valid persona even if we don't use it until
         # attach time, this will give the end user notice that the
@@ -710,7 +727,7 @@ class HP3PARCommon(object):
 
         return {'cpg': cpg, 'snap_cpg': snap_cpg,
                 'vvs_name': vvs_name, 'qos': qos,
-                'tpvv': tpvv, 'volume_type': volume_type}
+                'tpvv': tpvv, 'tdvv': tdvv, 'volume_type': volume_type}
 
     def create_volume(self, volume):
         LOG.debug("CREATE VOLUME (%s : %s %s)" %
@@ -733,6 +750,7 @@ class HP3PARCommon(object):
             cpg = type_info['cpg']
             snap_cpg = type_info['snap_cpg']
             tpvv = type_info['tpvv']
+            tdvv = type_info['tdvv']
 
             type_id = volume.get('volume_type_id', None)
             if type_id is not None:
@@ -746,6 +764,10 @@ class HP3PARCommon(object):
             extras = {'comment': json.dumps(comments),
                       'snapCPG': snap_cpg,
                       'tpvv': tpvv}
+
+            # Only set the dedup option if the backend supports it.
+            if self.API_VERSION >= DEDUP_API_VERSION:
+                extras['tdvv'] = tdvv
 
             capacity = self._capacity_from_size(volume['size'])
             volume_name = self._get_3par_vol_name(volume['id'])
@@ -777,7 +799,7 @@ class HP3PARCommon(object):
             raise exception.CinderException(ex)
 
     def _copy_volume(self, src_name, dest_name, cpg, snap_cpg=None,
-                     tpvv=True):
+                     tpvv=True, tdvv=False):
         # Virtual volume sets are not supported with the -online option
         LOG.debug(_('Creating clone of a volume %(src)s to %(dest)s.') %
                   {'src': src_name, 'dest': dest_name})
@@ -785,6 +807,9 @@ class HP3PARCommon(object):
         optional = {'tpvv': tpvv, 'online': True}
         if snap_cpg is not None:
             optional['snapCPG'] = snap_cpg
+
+        if self.API_VERSION >= DEDUP_API_VERSION:
+            optional['tdvv'] = tdvv
 
         body = self.client.copyVolume(src_name, dest_name, cpg, optional)
         return body['taskid']
@@ -815,7 +840,8 @@ class HP3PARCommon(object):
             # can't delete the original until the copy is done.
             self._copy_volume(orig_name, vol_name, cpg=type_info['cpg'],
                               snap_cpg=type_info['snap_cpg'],
-                              tpvv=type_info['tpvv'])
+                              tpvv=type_info['tpvv'],
+                              tdvv=type_info['tdvv'])
             return None
         except hpexceptions.HTTPForbidden:
             raise exception.NotAuthorized()
@@ -1048,21 +1074,9 @@ class HP3PARCommon(object):
 
     def attach_volume(self, volume, instance_uuid):
         LOG.debug("Attach Volume\n%s" % pprint.pformat(volume))
-        try:
-            self.update_volume_key_value_pair(volume,
-                                              'HPQ-CS-instance_uuid',
-                                              instance_uuid)
-        except Exception:
-            with excutils.save_and_reraise_exception():
-                LOG.error(_("Error attaching volume %s") % volume)
 
     def detach_volume(self, volume):
         LOG.debug("Detach Volume\n%s" % pprint.pformat(volume))
-        try:
-            self.clear_volume_key_value_pair(volume, 'HPQ-CS-instance_uuid')
-        except Exception:
-            with excutils.save_and_reraise_exception():
-                LOG.error(_("Error detaching volume %s") % volume)
 
     def migrate_volume(self, volume, host):
         """Migrate directly if source and dest are managed by same storage.
@@ -1140,7 +1154,8 @@ class HP3PARCommon(object):
 
             # Create a physical copy of the volume
             task_id = self._copy_volume(volume_name, temp_vol_name,
-                                        cpg, cpg, type_info['tpvv'])
+                                        cpg, cpg, type_info['tpvv'],
+                                        type_info['tdvv'])
 
             LOG.debug(_('Copy volume scheduled: convert_to_base_volume: '
                         'id=%s.') % volume['id'])

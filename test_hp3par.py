@@ -46,6 +46,7 @@ class HP3PARBaseDriver(object):
 
     VOLUME_ID = 'd03338a9-9115-48a3-8dfc-35cdfcdc15a7'
     CLONE_ID = 'd03338a9-9115-48a3-8dfc-000000000000'
+    VOLUME_TYPE_ID_DEDUP = 'd03338a9-9115-48a3-8dfc-11111111111'
     VOLUME_NAME = 'volume-' + VOLUME_ID
     VOLUME_NAME_3PAR = 'osv-0DM4qZEVSKON-DXN-NwVpw'
     SNAPSHOT_ID = '2f823bdc-e36e-4dc8-bd15-de1c7a28ff31'
@@ -89,6 +90,14 @@ class HP3PARBaseDriver(object):
               'volume_type': None,
               'volume_type_id': None}
 
+    volume_dedup = {'name': VOLUME_NAME,
+                    'id': VOLUME_ID,
+                    'display_name': 'Foo Volume',
+                    'size': 2,
+                    'host': FAKE_HOST,
+                    'volume_type': 'dedup',
+                    'volume_type_id': VOLUME_TYPE_ID_DEDUP}
+
     volume_qos = {'name': VOLUME_NAME,
                   'id': VOLUME_ID,
                   'display_name': 'Foo Volume',
@@ -129,6 +138,14 @@ class HP3PARBaseDriver(object):
                    'deleted_at': None,
                    'id': 'gold'}
 
+    volume_type_dedup = {'name': 'dedup',
+                         'deleted': False,
+                         'updated_at': None,
+                         'extra_specs': {'cpg': HP3PAR_CPG,
+                                         'provisioning': 'dedup'},
+                         'deleted_at': None,
+                         'id': VOLUME_TYPE_ID_DEDUP}
+
     cpgs = [
         {'SAGrowth': {'LDLayout': {'diskPatterns': [{'diskType': 2}]},
                       'incrementMiB': 8192},
@@ -156,6 +173,16 @@ class HP3PARBaseDriver(object):
          'numTPVVs': 0,
          'state': 1,
          'uuid': '29c214aa-62b9-41c8-b198-543f6cf24edf'}]
+
+    wsapi_version = {'major': 1,
+                     'build': 30201120,
+                     'minor': 4,
+                     'revision': 1}
+
+    wsapi_version_312 = {'major': 1,
+                         'build': 30102422,
+                         'minor': 3,
+                         'revision': 1}
 
     def setup_configuration(self):
         configuration = mock.Mock()
@@ -187,7 +214,8 @@ class HP3PARBaseDriver(object):
         PORT_PROTO_FC=client.HP3ParClient.PORT_PROTO_FC,
         TASK_DONE=client.HP3ParClient.TASK_DONE,
         HOST_EDIT_ADD=client.HP3ParClient.HOST_EDIT_ADD)
-    def setup_mock_client(self, _m_client, driver, conf=None, m_conf=None):
+    def setup_mock_client(self, _m_client, driver, conf=None, m_conf=None,
+                          wsapi_version=None):
 
         _m_client = _m_client.return_value
         if m_conf is not None:
@@ -195,6 +223,12 @@ class HP3PARBaseDriver(object):
 
         if conf is None:
             conf = self.setup_configuration()
+
+        if wsapi_version is None:
+            _m_client.getWsApiVersion.return_value = self.wsapi_version
+        else:
+            _m_client.getWsApiVersion.return_value = wsapi_version
+
         self.driver = driver(configuration=conf)
         self.driver.do_setup(None)
         return _m_client
@@ -217,10 +251,29 @@ class HP3PARBaseDriver(object):
                 1907, {
                     'comment': comment,
                     'tpvv': True,
+                    'tdvv': False,
                     'snapCPG': HP3PAR_CPG_SNAP}),
             mock.call.logout()]
 
         mock_client.assert_has_calls(expected)
+
+    @mock.patch.object(volume_types, 'get_volume_type')
+    def test_unsupported_dedup_volume_type(self, _mock_volume_types):
+
+        mock_client = self.setup_driver_312()
+        _mock_volume_types.return_value = {
+            'name': 'dedup',
+            'extra_specs': {
+                'cpg': HP3PAR_CPG,
+                'snap_cpg': HP3PAR_CPG_SNAP,
+                'vvs_name': self.VVS_NAME,
+                'qos': self.QOS,
+                'provisioning': 'dedup',
+                'volume_type': self.volume_type_dedup}}
+
+        self.assertRaises(exception.InvalidInput,
+                          self.driver.common.get_volume_settings_from_type,
+                          self.volume_dedup)
 
     @mock.patch.object(volume_types, 'get_volume_type')
     def test_create_volume_qos(self, _mock_volume_types):
@@ -236,9 +289,10 @@ class HP3PARBaseDriver(object):
                 'vvs_name': self.VVS_NAME,
                 'qos': self.QOS,
                 'tpvv': True,
+                'tdvv': False,
                 'volume_type': self.volume_type}}
 
-        self.driver.create_volume(self.volume_qos)
+        return_model = self.driver.create_volume(self.volume_qos)
         comment = (
             '{"volume_type_name": "gold", "display_name": "Foo Volume"'
             ', "name": "volume-d03338a9-9115-48a3-8dfc-35cdfcdc15a7'
@@ -253,10 +307,53 @@ class HP3PARBaseDriver(object):
                 1907, {
                     'comment': comment,
                     'tpvv': True,
+                    'tdvv': False,
                     'snapCPG': HP3PAR_CPG_SNAP}),
             mock.call.logout()]
 
         mock_client.assert_has_calls(expected)
+        self.assertEqual(return_model,
+                         {'metadata': None})
+
+    @mock.patch.object(volume_types, 'get_volume_type')
+    def test_create_volume_dedup(self, _mock_volume_types):
+        # setup_mock_client drive with default configuration
+        # and return the mock HTTP 3PAR client
+        mock_client = self.setup_driver()
+
+        _mock_volume_types.return_value = {
+            'name': 'dedup',
+            'extra_specs': {
+                'cpg': HP3PAR_CPG,
+                'snap_cpg': HP3PAR_CPG_SNAP,
+                'vvs_name': self.VVS_NAME,
+                'qos': self.QOS,
+                'provisioning': 'dedup',
+                'volume_type': self.volume_type_dedup}}
+
+        return_model = self.driver.create_volume(self.volume_dedup)
+        comment = (
+            '{"volume_type_name": "dedup", "display_name": "Foo Volume"'
+            ', "name": "volume-d03338a9-9115-48a3-8dfc-35cdfcdc15a7'
+            '", "volume_type_id": "d03338a9-9115-48a3-8dfc-11111111111"'
+            ', "volume_id": "d03338a9-9115-48a3-8dfc-35cdfcdc15a7"'
+            ', "qos": {}, "type": "OpenStack"}')
+
+        expected = [
+            mock.call.login(HP3PAR_USER_NAME, HP3PAR_USER_PASS),
+            mock.call.createVolume(
+                self.VOLUME_3PAR_NAME,
+                HP3PAR_CPG,
+                1907, {
+                    'comment': comment,
+                    'tpvv': False,
+                    'tdvv': True,
+                    'snapCPG': HP3PAR_CPG_SNAP}),
+            mock.call.logout()]
+
+        mock_client.assert_has_calls(expected)
+        self.assertEqual(return_model,
+                         {'metadata': None})
 
     def test_delete_volume(self):
 
@@ -296,7 +393,7 @@ class HP3PARBaseDriver(object):
                 'osv-0DM4qZEVSKON-AAAAAAAAA',
                 HP3PAR_CPG,
                 {'snapCPG': 'OpenStackCPGSnap', 'tpvv': True,
-                 'online': True}),
+                 'tdvv': False, 'online': True}),
             mock.call.logout()]
 
         mock_client.assert_has_calls(expected)
@@ -457,42 +554,18 @@ class HP3PARBaseDriver(object):
                                   'newhost',
                                   '/dev/vdb')
 
-        expected = [
-            mock.call.setVolumeMetaData(
-                self.VOLUME_3PAR_NAME,
-                'HPQ-CS-instance_uuid',
-                'abcdef')]
+        expected = []
 
         mock_client.assert_has_calls(expected)
-
-        # test the exception
-        mock_client.setVolumeMetaData.side_effect = Exception('Custom ex')
-        self.assertRaises(exception.CinderException,
-                          self.driver.attach_volume,
-                          context.get_admin_context(),
-                          self.volume,
-                          'abcdef',
-                          'newhost',
-                          '/dev/vdb')
 
     def test_detach_volume(self):
         # setup_mock_client drive with default configuration
         # and return the mock HTTP 3PAR client
         mock_client = self.setup_driver()
         self.driver.detach_volume(context.get_admin_context(), self.volume)
-        expected = [
-            mock.call.removeVolumeMetaData(
-                self.VOLUME_3PAR_NAME,
-                'HPQ-CS-instance_uuid')]
+        expected = []
 
         mock_client.assert_has_calls(expected)
-
-        # test the exception
-        mock_client.removeVolumeMetaData.side_effect = Exception('Custom ex')
-        self.assertRaises(exception.CinderException,
-                          self.driver.detach_volume,
-                          context.get_admin_context(),
-                          self.volume)
 
     def test_create_snapshot(self):
         # setup_mock_client drive with default configuration
@@ -672,6 +745,7 @@ class HP3PARBaseDriver(object):
                 'vvs_name': self.VVS_NAME,
                 'qos': self.QOS,
                 'tpvv': True,
+                'tdvv': False,
                 'volume_type': self.volume_type}}
         self.driver.create_volume_from_snapshot(self.volume_qos, self.snapshot)
 
@@ -956,6 +1030,32 @@ class TestHP3PARFCDriver(HP3PARBaseDriver, test.TestCase):
                 privatekey=HP3PAR_SAN_SSH_PRIVATE,
                 port=HP3PAR_SAN_SSH_PORT,
                 conn_timeout=HP3PAR_SAN_SSH_CON_TIMEOUT),
+            mock.call.getWsApiVersion(),
+            mock.call.login(HP3PAR_USER_NAME, HP3PAR_USER_PASS),
+            mock.call.getCPG(HP3PAR_CPG),
+            mock.call.logout()]
+        mock_client.assert_has_calls(expected)
+        mock_client.reset_mock()
+        return mock_client
+
+    def setup_driver_312(self, config=None, mock_conf=None):
+
+        self.ctxt = context.get_admin_context()
+        mock_client = self.setup_mock_client(
+            conf=config,
+            m_conf=mock_conf,
+            driver=hpfcdriver.HP3PARFCDriver,
+            wsapi_version=self.wsapi_version_312)
+
+        expected = [
+            mock.call.setSSHOptions(
+                HP3PAR_SAN_IP,
+                HP3PAR_USER_NAME,
+                HP3PAR_USER_PASS,
+                privatekey=HP3PAR_SAN_SSH_PRIVATE,
+                port=HP3PAR_SAN_SSH_PORT,
+                conn_timeout=HP3PAR_SAN_SSH_CON_TIMEOUT),
+            mock.call.getWsApiVersion(),
             mock.call.login(HP3PAR_USER_NAME, HP3PAR_USER_PASS),
             mock.call.getCPG(HP3PAR_CPG),
             mock.call.logout()]
@@ -1292,6 +1392,42 @@ class TestHP3PARISCSIDriver(HP3PARBaseDriver, test.TestCase):
                 privatekey=HP3PAR_SAN_SSH_PRIVATE,
                 port=HP3PAR_SAN_SSH_PORT,
                 conn_timeout=HP3PAR_SAN_SSH_CON_TIMEOUT),
+            mock.call.getWsApiVersion(),
+            mock.call.login(HP3PAR_USER_NAME, HP3PAR_USER_PASS),
+            mock.call.getCPG(HP3PAR_CPG),
+            mock.call.logout(),
+            mock.call.login(HP3PAR_USER_NAME, HP3PAR_USER_PASS),
+            mock.call.getPorts(),
+            mock.call.logout()]
+        mock_client.assert_has_calls(expected)
+        mock_client.reset_mock()
+
+        return mock_client
+
+    def setup_driver_312(self, config=None, mock_conf=None):
+
+        self.ctxt = context.get_admin_context()
+        # setup_mock_client default config, if necessary
+        if mock_conf is None:
+            mock_conf = {
+                'getPorts.return_value': {
+                    'members': self.FAKE_FC_PORTS + [self.FAKE_ISCSI_PORT]}}
+
+        mock_client = self.setup_mock_client(
+            conf=config,
+            m_conf=mock_conf,
+            driver=hpdriver.HP3PARISCSIDriver,
+            wsapi_version=self.wsapi_version_312)
+
+        expected = [
+            mock.call.setSSHOptions(
+                HP3PAR_SAN_IP,
+                HP3PAR_USER_NAME,
+                HP3PAR_USER_PASS,
+                privatekey=HP3PAR_SAN_SSH_PRIVATE,
+                port=HP3PAR_SAN_SSH_PORT,
+                conn_timeout=HP3PAR_SAN_SSH_CON_TIMEOUT),
+            mock.call.getWsApiVersion(),
             mock.call.login(HP3PAR_USER_NAME, HP3PAR_USER_PASS),
             mock.call.getCPG(HP3PAR_CPG),
             mock.call.logout(),
