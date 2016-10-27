@@ -70,10 +70,11 @@ class HP3PARFCDriver(cinder.volume.driver.FibreChannelDriver):
                 is present.  bug #1360001
         2.0.8 - Fixing missing login/logout around attach/detach bug #1367429
         2.88.9 - Removed usage of host name cache Bug #1398914
+        2.88.10 - Changed initialize_connection to use getHostVLUNs. #1475064
 
     """
 
-    VERSION = "2.88.9"
+    VERSION = "2.88.10"
 
     def __init__(self, *args, **kwargs):
         super(HP3PARFCDriver, self).__init__(*args, **kwargs)
@@ -218,17 +219,24 @@ class HP3PARFCDriver(cinder.volume.driver.FibreChannelDriver):
             target_wwns, init_targ_map, numPaths = \
                 self._build_initiator_target_map(connector)
 
+            # check if a VLUN already exists for this host
+            existing_vlun = self.common.find_existing_vlun(volume, host)
+            vlun = None
+            if existing_vlun is None:
             # now that we have a host, create the VLUN
-            if self.lookup_service is not None and numPaths == 1:
-                nsp = None
-                active_fc_port_list = self.common.get_active_fc_target_ports()
-                for port in active_fc_port_list:
-                    if port['portWWN'].lower() == target_wwns[0].lower():
-                        nsp = port['nsp']
-                        break
-                vlun = self.common.create_vlun(volume, host, nsp)
+                if self.lookup_service is not None and numPaths == 1:
+                    nsp = None
+                    active_fc_port_list = \
+                        self.common.get_active_fc_target_ports()
+                    for port in active_fc_port_list:
+                        if port['portWWN'].lower() == target_wwns[0].lower():
+                            nsp = port['nsp']
+                            break
+                    vlun = self.common.create_vlun(volume, host, nsp)
+                else:
+	                vlun = self.common.create_vlun(volume, host)
             else:
-                vlun = self.common.create_vlun(volume, host)
+                vlun = existing_vlun
 
             info = {'driver_volume_type': 'fibre_channel',
                     'data': {'target_lun': vlun['lun'],
