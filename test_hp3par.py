@@ -2014,10 +2014,12 @@ class TestHP3PARFCDriver(HP3PARBaseDriver, test.TestCase):
                              'vendor': None,
                              'wwn': self.wwn[1]}]}]
         mock_client.findHost.return_value = self.FAKE_HOST
-        mock_client.getHostVLUNs.return_value = [
-            {'active': True,
-             'volumeName': self.VOLUME_3PAR_NAME,
-             'lun': 90, 'type': 0}]
+        mock_client.getHostVLUNs.side_effect = [
+            hpexceptions.HTTPNotFound('fake'),
+            [{'active': True,
+              'volumeName': self.VOLUME_3PAR_NAME,
+              'lun': 90, 'type': 0}]]
+
         location = ("%(volume_name)s,%(lun_id)s,%(host)s,%(nsp)s" %
                     {'volume_name': self.VOLUME_3PAR_NAME,
                      'lun_id': 90,
@@ -2035,6 +2037,7 @@ class TestHP3PARFCDriver(HP3PARBaseDriver, test.TestCase):
             mock.ANY,
             mock.call.getHost(self.FAKE_HOST),
             mock.call.getPorts(),
+            mock.call.getHostVLUNs(self.FAKE_HOST),
             mock.call.createVLUN(
                 self.VOLUME_3PAR_NAME,
                 auto=True,
@@ -2075,10 +2078,12 @@ class TestHP3PARFCDriver(HP3PARBaseDriver, test.TestCase):
                              'vendor': None,
                              'wwn': self.wwn[0]}]}]
         mock_client.findHost.return_value = self.FAKE_HOST
-        mock_client.getHostVLUNs.return_value = [
-            {'active': True,
-             'volumeName': self.VOLUME_3PAR_NAME,
-             'lun': 90, 'type': 0}]
+        mock_client.getHostVLUNs.side_effect = [
+            hpexceptions.HTTPNotFound('fake'),
+            [{'active': True,
+              'volumeName': self.VOLUME_3PAR_NAME,
+              'lun': 90, 'type': 0}]]
+
         location = ("%(volume_name)s,%(lun_id)s,%(host)s,%(nsp)s" %
                     {'volume_name': self.VOLUME_3PAR_NAME,
                      'lun_id': 90,
@@ -2112,6 +2117,7 @@ class TestHP3PARFCDriver(HP3PARBaseDriver, test.TestCase):
             mock.ANY,
             mock.call.getHost(self.FAKE_HOST),
             mock.call.getPorts(),
+            mock.call.getHostVLUNs(self.FAKE_HOST),
             mock.call.getPorts(),
             mock.call.createVLUN(
                 self.VOLUME_3PAR_NAME,
@@ -2548,10 +2554,14 @@ class TestHP3PARISCSIDriver(HP3PARBaseDriver, test.TestCase):
             hpexceptions.HTTPNotFound('fake'),
             {'name': self.FAKE_HOST}]
         mock_client.findHost.return_value = self.FAKE_HOST
-        mock_client.getHostVLUNs.return_value = [
-            {'active': True,
-             'volumeName': self.VOLUME_3PAR_NAME,
-             'lun': self.TARGET_LUN, 'type': 0}]
+        mock_client.getHostVLUNs.side_effect = [
+            [{'hostname': self.FAKE_HOST,
+              'volumeName': self.VOLUME_3PAR_NAME,
+              'lun': self.TARGET_LUN,
+              'portPos': {'node': 8, 'slot': 1, 'cardPort': 1}}],
+            [{'active': True,
+              'volumeName': self.VOLUME_3PAR_NAME,
+              'lun': self.TARGET_LUN, 'type': 0}]]
         location = ("%(volume_name)s,%(lun_id)s,%(host)s,%(nsp)s" %
                     {'volume_name': self.VOLUME_3PAR_NAME,
                      'lun_id': self.TARGET_LUN,
@@ -2568,11 +2578,6 @@ class TestHP3PARISCSIDriver(HP3PARBaseDriver, test.TestCase):
             mock.call.getHost(self.FAKE_HOST),
             mock.call.findHost(iqn='iqn.1993-08.org.debian:01:222'),
             mock.call.getHost(self.FAKE_HOST),
-            mock.call.createVLUN(
-                self.VOLUME_3PAR_NAME,
-                auto=True,
-                hostname='fakehost',
-                portPos={'node': 8, 'slot': 1, 'cardPort': 1}),
             mock.call.getHostVLUNs(self.FAKE_HOST),
             mock.call.logout()]
 
