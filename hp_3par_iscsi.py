@@ -75,10 +75,10 @@ class HP3PARISCSIDriver(cinder.volume.driver.ISCSIDriver):
                 and hp3parclient 3.1.0.
         2.0.6 - Fixing missing login/logout around attach/detach bug #1367429
         2.88.7 - Removed usage of host name cache Bug #1398914
-        2.88.8 - Changed initialize_connection to use getHostVLUNs. #1475064
+
     """
 
-    VERSION = "2.88.8"
+    VERSION = "2.88.7"
 
     def __init__(self, *args, **kwargs):
         super(HP3PARISCSIDriver, self).__init__(*args, **kwargs)
@@ -273,25 +273,10 @@ class HP3PARISCSIDriver(cinder.volume.driver.ISCSIDriver):
         try:
             # we have to make sure we have a host
             host, username, password = self._create_host(volume, connector)
-            least_used_nsp = None
-            # check if a VLUN already exists for this host
-            existing_vlun = self.common.find_existing_vlun(volume, host)
-            if existing_vlun:
-                # We override the nsp here on purpose to force the
-                # volume to be exported out the same IP as it already is.
-                # This happens during nova live-migration, we want to
-                # disable the picking of a different IP that we export
-                # the volume to, or nova complains.
-                least_used_nsp = self.common.build_nsp(existing_vlun['portPos'])
-            if not least_used_nsp:
-                least_used_nsp = self._get_least_used_nsp_for_host(host['name'])
+            least_used_nsp = self._get_least_used_nsp_for_host(host['name'])
 
-            vlun = None
-            if existing_vlun is None:
-                # now that we have a host, create the VLUN
-                vlun = self.common.create_vlun(volume, host, least_used_nsp)
-            else:
-                vlun = existing_vlun
+            # now that we have a host, create the VLUN
+            vlun = self.common.create_vlun(volume, host, least_used_nsp)
 
             if least_used_nsp is None:
                 msg = _("Least busy iSCSI port not found, "
