@@ -152,11 +152,10 @@ class HP3PARCommon(object):
         2.0.22 - HP 3PAR drivers should not claim to have 'infinite' space
         2.0.23 - Increase the hostname size from 23 to 31  Bug #1371242
         2.88.24 - Removed usage of host name cache Bug #1398914
-        2.88.25 - Changed initialize_connection to use getHostVLUNs. #1475064
 
     """
 
-    VERSION = "2.88.25"
+    VERSION = "2.88.24"
 
     stats = {}
 
@@ -1801,30 +1800,6 @@ class HP3PARCommon(object):
         old_volume_settings = self.get_volume_settings_from_type(volume)
         return self._retype_from_old_to_new(volume, new_type,
                                             old_volume_settings, host)
-
-    def find_existing_vlun(self, volume, host):
-        """Finds an existing VLUN for a volume on a host.
-
-        Returns an existing VLUN's information. If no existing VLUN is found,
-        None is returned.
-
-        :param volume: A dictionary describing a volume.
-        :param host: A dictionary describing a host.
-        """
-        existing_vlun = None
-        try:
-            vol_name = self._get_3par_vol_name(volume['id'])
-            host_vluns = self.client.getHostVLUNs(host['name'])
-
-            # The first existing VLUN found will be returned.
-            for vlun in host_vluns:
-                if vlun['volumeName'] == vol_name:
-                    existing_vlun = vlun
-                    break
-        except hpexceptions.HTTPNotFound:
-            # ignore, no existing VLUNs were found
-            pass
-        return existing_vlun
 
     class TaskWaiter(object):
         """TaskWaiter waits for task to be not active and returns status."""
