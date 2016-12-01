@@ -204,10 +204,12 @@ class HP3PARCommon(object):
         2.0.52 - Added update_migrated_volume. bug #1492023
         2.0.53 - Fix volume size conversion. bug #1513158
         2.0.54 - Use same LUN ID for each VLUN path #1551994
+        2.0.55 - Driver no longer fails to initialize if
+                 System Reporter license is missing. bug #1568078
 
     """
 
-    VERSION = "2.0.54"
+    VERSION = "2.0.55"
 
     stats = {}
 
@@ -223,6 +225,9 @@ class HP3PARCommon(object):
     CONVERT_TO_THIN = 1
     CONVERT_TO_FULL = 2
     CONVERT_TO_DEDUP = 3
+
+    # License values for reported capabilities
+    SYSTEM_REPORTER_LIC = "System Reporter"
 
     # Valid values for volume type extra specs
     # The first value in the list is the default value
@@ -912,25 +917,41 @@ class HP3PARCommon(object):
         pools = []
         info = self.client.getStorageSystemInfo()
 
+        sr_support = True
+        if 'licenseInfo' in info:
+            if 'licenses' in info['licenseInfo']:
+                valid_licenses = info['licenseInfo']['licenses']
+                sr_support = self._check_license_enabled(
+                    valid_licenses, self.SYSTEM_REPORTER_LIC,
+                    "System_reporter_support")
+
         for cpg_name in self.config.hp3par_cpg:
             try:
+                stat_capabilities = {
+                    THROUGHPUT: None,
+                    BANDWIDTH: None,
+                    LATENCY: None,
+                    IO_SIZE: None,
+                    QUEUE_LENGTH: None,
+                    AVG_BUSY_PERC: None
+                }
                 cpg = self.client.getCPG(cpg_name)
                 if (self.API_VERSION >= SRSTATLD_API_VERSION
-                        and hp3parclient.version >= GETCPGSTATDATA_VERSION):
+                        and hp3parclient.version >= GETCPGSTATDATA_VERSION
+                        and sr_support):
                     interval = 'daily'
                     history = '7d'
-                    stat_capabilities = self.client.getCPGStatData(cpg_name,
-                                                                   interval,
-                                                                   history)
-                else:
-                    stat_capabilities = {
-                        THROUGHPUT: None,
-                        BANDWIDTH: None,
-                        LATENCY: None,
-                        IO_SIZE: None,
-                        QUEUE_LENGTH: None,
-                        AVG_BUSY_PERC: None
-                    }
+                    try:
+                        stat_capabilities = self.client.getCPGStatData(
+                            cpg_name,
+                            interval,
+                            history)
+                    except Exception as ex:
+                        LOG.warning(_LW("Exception at getCPGStatData() "
+                                        "for cpg: '%(cpg_name)s' "
+                                        "Reason: '%(reason)s'") %
+                                    {'cpg_name': cpg_name, 'reason': ex})
+
                 if 'numTDVVs' in cpg:
                     total_volumes = int(
                         cpg['numFPVVs'] + cpg['numTPVVs'] + cpg['numTDVVs']
@@ -1007,6 +1028,19 @@ class HP3PARCommon(object):
                       'vendor_name': 'Hewlett-Packard',
                       'volume_backend_name': None,
                       'pools': pools}
+
+    def _check_license_enabled(self, valid_licenses,
+                               license_to_check, capability):
+        """Check a license against valid licenses on the array."""
+        if valid_licenses:
+            for license in valid_licenses:
+                if license_to_check in license.get('name'):
+                    return True
+            LOG.debug(("'%(capability)s' requires a '%(license)s' "
+                       "license which is not installed.") %
+                      {'capability': capability,
+                       'license': license_to_check})
+        return False
 
     def _get_vlun(self, volume_name, hostname, lun_id=None, nsp=None):
         """find a VLUN on a 3PAR host."""
