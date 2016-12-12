@@ -3981,7 +3981,10 @@ class TestHP3PARFCDriver(HP3PARBaseDriver, test.TestCase):
         mock_client = self.setup_driver(config=config)
         mock_client.getCPG.return_value = self.cpgs[0]
         mock_client.getStorageSystemInfo.return_value = {
-            'serialNumber': '1234'
+            'serialNumber': '1234',
+            'licenseInfo': {
+                'licenses': [{'name': 'System Reporter'}]
+            }
         }
 
         # cpg has no limit
@@ -4218,6 +4221,67 @@ class TestHP3PARFCDriver(HP3PARBaseDriver, test.TestCase):
             self.assertEqual(None, stats['pools'][0][IO_SIZE])
             self.assertEqual(None, stats['pools'][0][QUEUE_LENGTH])
             self.assertEqual(None, stats['pools'][0][AVG_BUSY_PERC])
+
+            expected = [
+                mock.call.getStorageSystemInfo(),
+                mock.call.getCPG(HP3PAR_CPG),
+                mock.call.getCPGAvailableSpace(HP3PAR_CPG),
+                mock.call.getCPG(HP3PAR_CPG2),
+                mock.call.getCPGAvailableSpace(HP3PAR_CPG2)]
+
+            mock_client.assert_has_calls(
+                self.standard_login +
+                expected +
+                self.standard_logout)
+
+    @mock.patch('hp3parclient.version', "3.2.22")
+    def test_get_volume_stats4(self):
+        # Testing get_volume_stats() when System Reporter license is not active
+        # setup_mock_client drive with the configuration
+        # and return the mock HTTP 3PAR client
+        config = self.setup_configuration()
+        config.filter_function = FILTER_FUNCTION
+        config.goodness_function = GOODNESS_FUNCTION
+        mock_client = self.setup_driver(config=config)
+        mock_client.getCPG.return_value = self.cpgs[0]
+        # Purposely left out the System Reporter license in
+        # getStorageSystemInfo to test sr_support
+        mock_client.getStorageSystemInfo.return_value = {
+            'serialNumber': '1234',
+            'licenseInfo': {
+                'licenses': []
+            }
+        }
+
+        # cpg has no limit
+        mock_client.getCPGAvailableSpace.return_value = {
+            "capacityEfficiency": {u'compaction': 594.4},
+            "rawFreeMiB": 1024.0 * 6,
+            "usableFreeMiB": 1024.0 * 3
+        }
+
+        with mock.patch.object(hpcommon.HP3PARCommon,
+                               '_create_client') as mock_create_client:
+            mock_create_client.return_value = mock_client
+
+            stats = self.driver.get_volume_stats(True)
+            self.assertEqual('FC', stats['storage_protocol'])
+            self.assertTrue(stats['pools'][0]['thin_provisioning_support'])
+            self.assertTrue(stats['pools'][0]['QoS_support'])
+            self.assertEqual(24.0, stats['pools'][0]['total_capacity_gb'])
+            self.assertEqual(3.0, stats['pools'][0]['free_capacity_gb'])
+            self.assertEqual(87.5, stats['pools'][0]['capacity_utilization'])
+            self.assertEqual(3, stats['pools'][0]['total_volumes'])
+            self.assertEqual(GOODNESS_FUNCTION,
+                             stats['pools'][0]['goodness_function'])
+            self.assertEqual(FILTER_FUNCTION,
+                             stats['pools'][0]['filter_function'])
+            self.assertIsNone(stats['pools'][0][THROUGHPUT])
+            self.assertIsNone(stats['pools'][0][BANDWIDTH])
+            self.assertIsNone(stats['pools'][0][LATENCY])
+            self.assertIsNone(stats['pools'][0][IO_SIZE])
+            self.assertIsNone(stats['pools'][0][QUEUE_LENGTH])
+            self.assertIsNone(stats['pools'][0][AVG_BUSY_PERC])
 
             expected = [
                 mock.call.getStorageSystemInfo(),
@@ -4931,6 +4995,67 @@ class TestHP3PARISCSIDriver(HP3PARBaseDriver, test.TestCase):
             self.assertEqual(None, stats['pools'][0][IO_SIZE])
             self.assertEqual(None, stats['pools'][0][QUEUE_LENGTH])
             self.assertEqual(None, stats['pools'][0][AVG_BUSY_PERC])
+
+            expected = [
+                mock.call.getStorageSystemInfo(),
+                mock.call.getCPG(HP3PAR_CPG),
+                mock.call.getCPGAvailableSpace(HP3PAR_CPG),
+                mock.call.getCPG(HP3PAR_CPG2),
+                mock.call.getCPGAvailableSpace(HP3PAR_CPG2)]
+
+            mock_client.assert_has_calls(
+                self.standard_login +
+                expected +
+                self.standard_logout)
+
+    @mock.patch('hp3parclient.version', "3.2.22")
+    def test_get_volume_stats4(self):
+        # Testing get_volume_stats() when System Reporter license is not active
+        # setup_mock_client drive with the configuration
+        # and return the mock HTTP 3PAR client
+        config = self.setup_configuration()
+        config.filter_function = FILTER_FUNCTION
+        config.goodness_function = GOODNESS_FUNCTION
+        mock_client = self.setup_driver(config=config)
+        mock_client.getCPG.return_value = self.cpgs[0]
+        # Purposely left out the System Reporter license in
+        # getStorageSystemInfo to test sr_support
+        mock_client.getStorageSystemInfo.return_value = {
+            'serialNumber': '1234',
+            'licenseInfo': {
+                'licenses': []
+            }
+        }
+
+        # cpg has no limit
+        mock_client.getCPGAvailableSpace.return_value = {
+            "capacityEfficiency": {u'compaction': 594.4},
+            "rawFreeMiB": 1024.0 * 6,
+            "usableFreeMiB": 1024.0 * 3
+        }
+
+        with mock.patch.object(hpcommon.HP3PARCommon,
+                               '_create_client') as mock_create_client:
+            mock_create_client.return_value = mock_client
+
+            stats = self.driver.get_volume_stats(True)
+            self.assertEqual('iSCSI', stats['storage_protocol'])
+            self.assertTrue(stats['pools'][0]['thin_provisioning_support'])
+            self.assertTrue(stats['pools'][0]['QoS_support'])
+            self.assertEqual(24.0, stats['pools'][0]['total_capacity_gb'])
+            self.assertEqual(3.0, stats['pools'][0]['free_capacity_gb'])
+            self.assertEqual(87.5, stats['pools'][0]['capacity_utilization'])
+            self.assertEqual(3, stats['pools'][0]['total_volumes'])
+            self.assertEqual(GOODNESS_FUNCTION,
+                             stats['pools'][0]['goodness_function'])
+            self.assertEqual(FILTER_FUNCTION,
+                             stats['pools'][0]['filter_function'])
+            self.assertIsNone(stats['pools'][0][THROUGHPUT])
+            self.assertIsNone(stats['pools'][0][BANDWIDTH])
+            self.assertIsNone(stats['pools'][0][LATENCY])
+            self.assertIsNone(stats['pools'][0][IO_SIZE])
+            self.assertIsNone(stats['pools'][0][QUEUE_LENGTH])
+            self.assertIsNone(stats['pools'][0][AVG_BUSY_PERC])
 
             expected = [
                 mock.call.getStorageSystemInfo(),
